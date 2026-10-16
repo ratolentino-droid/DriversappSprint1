@@ -304,7 +304,7 @@
           <li id="nav-trips" onclick="navigateTo('epod')" class="flex items-center justify-between border-b border-gray-300 py-4 cursor-pointer hover:bg-gray-200 transition-colors">
             <div class="flex items-center">
               <i class="fa-solid fa-file-signature text-gray-500 mr-4 text-2xl w-8 text-center"></i>
-              <span class="text-gray-500 font-semibold text-sm tracking-wider">TRIP Changed</span>
+              <span class="text-gray-500 font-semibold text-sm tracking-wider">TRIP</span>
             </div>
             <span id="dashboard-trip-counter" class="bg-[#f29900] text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">0</span>
           </li>
@@ -1032,6 +1032,7 @@
       reportingConfig: 'Distance: 200 m',
       demoNewTripAdded: false,
       autoExecutionTimer: null,
+      statusTimers: {},
       smsMessages: [],
       notifications: [
         { id: 'n_init1', title: 'System Update', message: 'TMSuite synced successfully.', timestamp: '08:30 AM', read: true, icon: 'fa-solid fa-gear text-slate-500' }
@@ -1090,9 +1091,12 @@
         case 'FOR_DISPATCH': return { label: 'For Dispatch', badgeClass: 'bg-amber-100 text-amber-800' };
         case 'DISPATCHED':
         case 'ASSIGNED': return { label: 'Dispatched', badgeClass: 'bg-[#DBEAFE] text-[#1e40af]' };
-        case 'IN_TRANSIT':
-        case 'LOADED': return { label: 'In Transit', badgeClass: 'bg-cyan-100 text-cyan-800' };
+        case 'ARRIVED_AT_PICKUP': return { label: 'Arrived at Pickup', badgeClass: 'bg-sky-100 text-sky-800' };
         case 'LOADING': return { label: 'Loading', badgeClass: 'bg-indigo-100 text-indigo-800' };
+        case 'LOADED': return { label: 'Loaded', badgeClass: 'bg-violet-100 text-violet-800' };
+        case 'IN_TRANSIT': return { label: 'In Transit', badgeClass: 'bg-cyan-100 text-cyan-800' };
+        case 'ARRIVED_AT_DROP_OFF':
+        case 'ARRIVED_AT_DROPOFF': return { label: 'Arrived at Drop-off', badgeClass: 'bg-amber-100 text-amber-800' };
         case 'UNLOADING': return { label: 'Unloading', badgeClass: 'bg-orange-100 text-orange-800' };
         case 'EPOD_READY': return { label: 'Add POD', badgeClass: 'bg-emerald-100 text-emerald-800' };
         case 'COMPLETED': return { label: 'Completed', badgeClass: 'bg-green-100 text-green-700' };
@@ -1103,17 +1107,45 @@
     function getWorkflowStep(trip) {
       switch (trip.status) {
         case 'DISPATCHED':
-        case 'ASSIGNED': 
+        case 'ASSIGNED':
+        case 'ARRIVED_AT_PICKUP':
           return { label: 'Start Loading', next: 'LOADING', btnClass: 'bg-blue-600 hover:bg-blue-700 text-white', icon: 'fa-box' };
-        case 'LOADING': 
-          return { label: 'Finish Loading', next: 'IN_TRANSIT', btnClass: 'bg-indigo-600 hover:bg-indigo-700 text-white', icon: 'fa-check-to-slot' };
+        case 'LOADING':
+          return { label: 'Finish Loading', next: 'LOADED', btnClass: 'bg-indigo-600 hover:bg-indigo-700 text-white', icon: 'fa-check-to-slot' };
         case 'IN_TRANSIT':
         case 'LOADED':
+        case 'ARRIVED_AT_DROP_OFF':
+        case 'ARRIVED_AT_DROPOFF':
         case 'UNLOADING':
           return { label: 'Select Drop-off to Unload', next: null, disabled: true, btnClass: 'bg-slate-300 text-slate-500 cursor-not-allowed', icon: 'fa-location-dot' };
-        default: 
+        default:
           return null;
       }
+    }
+
+    function scheduleTripStatusTransition(tripId, fromStatus, toStatus, delayMs) {
+      const trip = state.trips.find(t => t.id === tripId);
+      if (!trip || trip.status !== fromStatus) return;
+
+      const timers = state.statusTimers[tripId] || {};
+      if (timers[toStatus]) clearTimeout(timers[toStatus]);
+
+      timers[toStatus] = setTimeout(() => {
+        const currentTrip = state.trips.find(t => t.id === tripId);
+        if (!currentTrip) return;
+        if (currentTrip.status === fromStatus) {
+          currentTrip.status = toStatus;
+          renderTripDetail();
+          renderTripsList();
+
+          if (toStatus === 'IN_TRANSIT') {
+            scheduleTripStatusTransition(tripId, 'IN_TRANSIT', 'ARRIVED_AT_DROP_OFF', 2500);
+          }
+        }
+        if (state.statusTimers[tripId]) delete state.statusTimers[tripId][toStatus];
+      }, delayMs);
+
+      state.statusTimers[tripId] = timers;
     }
 
     function simulateNewTripAssigned() {
@@ -1226,7 +1258,7 @@
       const container = document.getElementById('trips-container');
       if (!container) return; 
 
-      const ongoingTrips = state.trips.filter(t => t.type === 'ongoing' || ['DISPATCHED', 'IN_TRANSIT', 'LOADING', 'LOADED', 'UNLOADING', 'EPOD_READY'].includes(t.status));
+      const ongoingTrips = state.trips.filter(t => t.type === 'ongoing' || ['DISPATCHED', 'ARRIVED_AT_PICKUP', 'LOADING', 'LOADED', 'IN_TRANSIT', 'ARRIVED_AT_DROP_OFF', 'ARRIVED_AT_DROPOFF', 'UNLOADING', 'EPOD_READY'].includes(t.status));
       const upcomingTrips = state.trips.filter(t => t.type === 'upcoming' && (t.status === 'FOR_DISPATCH' || t.status === 'DISPATCHED' || t.status === 'ASSIGNED'));
       const completedTrips = state.trips.filter(t => t.type === 'completed' || t.status === 'COMPLETED');
       
@@ -1497,7 +1529,7 @@
       const step = getWorkflowStep(trip);
       if (!step) return;
 
-      const isStartLoadingStep = (trip.status === 'DISPATCHED' || trip.status === 'ASSIGNED' || trip.status === 'IN_TRANSIT');
+      const isStartLoadingStep = (trip.status === 'DISPATCHED' || trip.status === 'ASSIGNED' || trip.status === 'ARRIVED_AT_PICKUP');
       const isDisabled = isStartLoadingStep && trip.dockState !== 'ARRIVED';
 
       if (isDisabled || step.disabled) {
@@ -1522,12 +1554,20 @@
       const step = getWorkflowStep(trip);
       if (!step || step.disabled) return;
 
-      if (step.next === 'IN_TRANSIT' || step.next === 'LOADED') {
-        trip.status = 'IN_TRANSIT';
+      if (step.next === 'LOADING') {
+        trip.status = 'LOADING';
+        renderTripDetail();
+        renderTripsList();
+        return;
+      }
+
+      if (step.next === 'LOADED') {
+        trip.status = 'LOADED';
         trip.dockNumber = null;
         trip.dockState = null;
         renderTripDetail();
         renderTripsList();
+        scheduleTripStatusTransition(trip.id, 'LOADED', 'IN_TRANSIT', 2500);
         return;
       }
 
@@ -1590,7 +1630,7 @@
             return;
         }
 
-        if (trip.status === 'IN_TRANSIT' || trip.status === 'LOADED' || trip.status === 'UNLOADING') {
+        if (trip.status === 'IN_TRANSIT' || trip.status === 'LOADED' || trip.status === 'ARRIVED_AT_DROP_OFF' || trip.status === 'ARRIVED_AT_DROPOFF' || trip.status === 'UNLOADING') {
              container.innerHTML = `
               <button onclick="checkGeofenceForUnloading()" class="w-full bg-orange-600 hover:bg-orange-700 text-white font-black py-4 px-4 rounded-xl shadow-lg active:scale-95 transition flex items-center justify-center space-x-2 text-sm tracking-wide uppercase">
                 <i class="fa-solid fa-box-open"></i> <span>Start Unloading</span>
@@ -2405,7 +2445,11 @@
       const trip = state.trips.find(t => t.id === tripId);
       if (!trip) return;
       trip.dockState = 'ARRIVED';
+      if (trip.status === 'DISPATCHED' || trip.status === 'ASSIGNED') {
+        trip.status = 'ARRIVED_AT_PICKUP';
+      }
       renderTripDetail();
+      renderTripsList();
     }
 
     if (!dockTimerInterval) {
@@ -3002,9 +3046,9 @@
           "Trip Status": {
             type: "Status Badge",
             description: "Visual indicator of current trip progression state positioned immediately after Trip Number on Row 2.",
-            behavior: "Displays dynamic status text and background color (e.g., DISPATCHED).", interaction: "None.", sysResponse: "None.", states: "Dynamic based on status.", validation: "N/A", rules: "Immediately follows Trip Number.", navFlow: "N/A", qaNotes: "N/A",
+            behavior: "Displays the active trip state across the full lifecycle: Dispatched → Arrived at Pickup → Loaded → In Transit → Arrived at Drop-off → Unloading → Complete. Each state uses the standard trip status badge pattern and supports automatic transitions after Loaded and In Transit.", interaction: "None.", sysResponse: "None.", states: "Dispatched, Arrived at Pickup, Loaded, In Transit, Arrived at Drop-off, Unloading, Complete.", validation: "N/A", rules: "Immediately follows Trip Number. Trigger mapping must align with the prototype: Finish Loading → Loaded; Loaded → In Transit after 2–3 sec; In Transit → Arrived at Drop-off after 2–3 sec; Start Unloading → Unloading; Complete Delivery → Complete.", navFlow: "N/A", qaNotes: "N/A",
             design: { spacing: "px-2 py-0.5", rounded: "rounded-full", typography: "text-[9px] font-black uppercase tracking-wider" },
-            colors: [{label: "Background (Dispatched)", value: "#DBEAFE"}, {label: "Text (Dispatched)", value: "#1e40af"}]
+            colors: [{label: "Background (Dispatched)", value: "#DBEAFE"}, {label: "Text (Dispatched)", value: "#1e40af"}, {label: "Background (Loaded)", value: "#ede9fe"}, {label: "Text (Loaded)", value: "#6d28d9"}, {label: "Background (Complete)", value: "#dcfce7"}, {label: "Text (Complete)", value: "#15803d"}]
           },
           "Divider": {
             type: "Horizontal Divider",
@@ -3247,10 +3291,10 @@
           },
           "Status": {
             type: "Status Badge",
-            description: "Current trip status badge immediately following Trip Number on Row 2.",
-            behavior: "Displays status text and background color matching the Trip Card.", interaction: "None.", sysResponse: "None.", states: "Dynamic based on status.", validation: "N/A", rules: "N/A", navFlow: "N/A", qaNotes: "N/A",
+            description: "Current trip status badge immediately following Trip Number on Row 2. Status sequence follows Dispatched → Arrived at Pickup → Loaded → In Transit → Arrived at Drop-off → Unloading → Complete.",
+            behavior: "Displays the live trip state and matches the Trip Card badge styling. Automatic transitions: Loaded → In Transit after 2–3 seconds; In Transit → Arrived at Drop-off after 2–3 seconds.", interaction: "None.", sysResponse: "None.", states: "Dispatched, Arrived at Pickup, Loaded, In Transit, Arrived at Drop-off, Unloading, Complete.", validation: "N/A", rules: "Keep right-aligned on the card and retain standard badge treatment. Complete remains green.", navFlow: "N/A", qaNotes: "N/A",
             design: { spacing: "px-2 py-0.5", rounded: "rounded-full", typography: "text-[9px] font-black uppercase tracking-wider" },
-            colors: [{label: "Badge Background", value: "Dynamic"}, {label: "Badge Text", value: "Dynamic"}]
+            colors: [{label: "Badge Background", value: "Dynamic"}, {label: "Badge Text", value: "Dynamic"}, {label: "Complete Background", value: "#dcfce7"}, {label: "Complete Text", value: "#15803d"}]
           },
           "Route Sequence": {
             type: "Route Progress / Timeline Card Container",
